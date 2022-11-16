@@ -32,7 +32,15 @@ android {
             dimension 'device'
             testInstrumentationRunnerArguments = ['test_device_driver': 'Ftdi', 'test_device_port': '1']
         }
-        pl2302 {
+        pl2303 {
+            dimension 'device'
+            testInstrumentationRunnerArguments = ['test_device_driver': 'Prolific']
+        }
+        pl2303t {
+            dimension 'device'
+            testInstrumentationRunnerArguments = ['test_device_driver': 'Prolific']
+        }
+        pl2303g {
             dimension 'device'
             testInstrumentationRunnerArguments = ['test_device_driver': 'Prolific']
         }
@@ -40,7 +48,7 @@ android {
 
     buildTypes {
         debug {
-            testCoverageEnabled true
+            testCoverageEnabled true // disable for testAnyDeviceDebugUnitTest
         }
     }
 }
@@ -53,9 +61,9 @@ project.gradle.taskGraph.whenReady {
 }
 
 task jacocoTestReport(type: JacocoReport ,
-        dependsOn: ['compileAnyDeviceDebugSources' /*'testDebugUnitTest', 'createAnyDeviceDebugCoverageReport'*/]) {
+        dependsOn: ['compileAnyDeviceDebugSources' /*'testAnyDeviceDebugUnitTest' , 'create<device>DebugCoverageReport'*/]) {
     reports {
-        xml.enabled = false
+        xml.enabled = true
         html.enabled = true
     }
 
@@ -66,6 +74,6 @@ task jacocoTestReport(type: JacocoReport ,
     sourceDirectories.from files([mainSrc])
     classDirectories.from files([debugTree])
     executionData.from fileTree(dir: project.buildDir, includes: [
-            /*'jacoco/testDebugUnitTest.exec',*/ 'outputs/code_coverage/*AndroidTest/connected/*.ec'
+            'jacoco/testAnyDeviceDebugUnitTest.exec', 'outputs/code_coverage/*AndroidTest/connected/*.ec'
     ])
 }

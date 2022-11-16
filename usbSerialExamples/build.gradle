@@ -1,8 +1,9 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion '29.0.3'
+    compileSdkVersion 32
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -11,10 +12,9 @@ android {
 
     defaultConfig {
         minSdkVersion 17
-        targetSdkVersion 29
+        targetSdkVersion 32
         vectorDrawables.useSupportLibrary = true
 
-        testInstrumentationRunner "android.test.InstrumentationTestRunner"
         missingDimensionStrategy 'device', 'anyDevice'
     }
 
@@ -27,6 +27,6 @@ android {
 
 dependencies {
     implementation project(':usbSerialForAndroid')
-    implementation 'androidx.appcompat:appcompat:1.2.0'
-    implementation 'com.google.android.material:material:1.2.1'
+    implementation 'androidx.appcompat:appcompat:1.4.1'
+    implementation 'com.google.android.material:material:1.5.0'
 }

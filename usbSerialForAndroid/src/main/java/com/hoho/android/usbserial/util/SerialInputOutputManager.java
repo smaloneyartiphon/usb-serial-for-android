@@ -21,8 +21,15 @@ import java.nio.ByteBuffer;
  */
 public class SerialInputOutputManager implements Runnable {
 
+    public enum State {
+        STOPPED,
+        RUNNING,
+        STOPPING
+    }
+
+    public static boolean DEBUG = false;
+
     private static final String TAG = SerialInputOutputManager.class.getSimpleName();
-    private static final boolean DEBUG = true;
     private static final int BUFSIZ = 4096;
 
     /**
@@ -34,14 +41,8 @@ public class SerialInputOutputManager implements Runnable {
     private final Object mReadBufferLock = new Object();
     private final Object mWriteBufferLock = new Object();
 
-    private ByteBuffer mReadBuffer = ByteBuffer.allocate(BUFSIZ);
+    private ByteBuffer mReadBuffer; // default size = getReadEndpoint().getMaxPacketSize()
     private ByteBuffer mWriteBuffer = ByteBuffer.allocate(BUFSIZ);
-
-    public enum State {
-        STOPPED,
-        RUNNING,
-        STOPPING
-    }
 
     private int mThreadPriority = Process.THREAD_PRIORITY_URGENT_AUDIO;
     private State mState = State.STOPPED; // Synchronized by 'this'
@@ -52,21 +53,23 @@ public class SerialInputOutputManager implements Runnable {
         /**
          * Called when new incoming data is available.
          */
-        public void onNewData(byte[] data);
+        void onNewData(byte[] data);
 
         /**
          * Called when {@link SerialInputOutputManager#run()} aborts due to an error.
          */
-        public void onRunError(Exception e);
+        void onRunError(Exception e);
     }
 
     public SerialInputOutputManager(UsbSerialPort serialPort) {
         mSerialPort = serialPort;
+        mReadBuffer = ByteBuffer.allocate(serialPort.getReadEndpoint().getMaxPacketSize());
     }
 
     public SerialInputOutputManager(UsbSerialPort serialPort, Listener listener) {
         mSerialPort = serialPort;
         mListener = listener;
+        mReadBuffer = ByteBuffer.allocate(serialPort.getReadEndpoint().getMaxPacketSize());
     }
 
     public synchronized void setListener(Listener listener) {
@@ -78,7 +81,7 @@ public class SerialInputOutputManager implements Runnable {
     }
 
     /**
-     * setThreadPriority. By default use higher priority than UI thread to prevent data loss
+     * setThreadPriority. By default a higher priority than UI thread is used to prevent data loss
      *
      * @param threadPriority  see {@link Process#setThreadPriority(int)}
      * */
@@ -140,8 +143,8 @@ public class SerialInputOutputManager implements Runnable {
         return mWriteBuffer.capacity();
     }
 
-    /*
-     * when writeAsync is used, it is recommended to use readTimeout != 0,
+    /**
+     * when using writeAsync, it is recommended to use readTimeout != 0,
      * else the write will be delayed until read data is available
      */
     public void writeAsync(byte[] data) {
@@ -150,6 +153,21 @@ public class SerialInputOutputManager implements Runnable {
         }
     }
 
+    /**
+     * start SerialInputOutputManager in separate thread
+     */
+    public void start() {
+        if(mState != State.STOPPED)
+            throw new IllegalStateException("already started");
+        new Thread(this, this.getClass().getSimpleName()).start();
+    }
+
+    /**
+     * stop SerialInputOutputManager thread
+     *
+     * when using readTimeout == 0 (default), additionally use usbSerialPort.close() to
+     * interrupt blocking read
+     */
     public synchronized void stop() {
         if (getState() == State.RUNNING) {
             Log.i(TAG, "Stop requested");
@@ -167,18 +185,16 @@ public class SerialInputOutputManager implements Runnable {
      */
     @Override
     public void run() {
-        if(mThreadPriority != Process.THREAD_PRIORITY_DEFAULT)
-            setThreadPriority(mThreadPriority);
-
         synchronized (this) {
             if (getState() != State.STOPPED) {
                 throw new IllegalStateException("Already running");
             }
             mState = State.RUNNING;
         }
-
         Log.i(TAG, "Running ...");
         try {
+            if(mThreadPriority != Process.THREAD_PRIORITY_DEFAULT)
+                Process.setThreadPriority(mThreadPriority);
             while (true) {
                 if (getState() != State.RUNNING) {
                     Log.i(TAG, "Stopping mState=" + getState());
@@ -202,13 +218,15 @@ public class SerialInputOutputManager implements Runnable {
 
     private void step() throws IOException {
         // Handle incoming data.
-        byte[] buffer = null;
+        byte[] buffer;
         synchronized (mReadBufferLock) {
             buffer = mReadBuffer.array();
         }
         int len = mSerialPort.read(buffer, mReadTimeout);
         if (len > 0) {
-            if (DEBUG) Log.d(TAG, "Read data len=" + len);
+            if (DEBUG) {
+                Log.d(TAG, "Read data len=" + len);
+            }
             final Listener listener = getListener();
             if (listener != null) {
                 final byte[] data = new byte[len];

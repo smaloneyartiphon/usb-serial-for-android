@@ -5,13 +5,20 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
-import android.os.Process;
+import android.media.RingtoneManager;
+import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver;
+import com.hoho.android.usbserial.driver.Ch34xSerialDriver;
+import com.hoho.android.usbserial.driver.CommonUsbSerialPort;
+import com.hoho.android.usbserial.driver.Cp21xxSerialDriver;
+import com.hoho.android.usbserial.driver.FtdiSerialDriver;
+import com.hoho.android.usbserial.driver.ProlificSerialDriver;
+import com.hoho.android.usbserial.driver.UsbId;
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 
@@ -21,15 +28,9 @@ import java.util.Deque;
 import java.util.EnumSet;
 import java.util.LinkedList;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Executors;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-
 
 public class UsbWrapper implements SerialInputOutputManager.Listener {
 
@@ -53,17 +54,28 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
     public boolean readBlock = false;
     long readTime = 0;
 
+    // device properties
+    public boolean isCp21xxRestrictedPort; // second port of Cp2105 has limited dataBits, stopBits, parity
+    public boolean inputLinesSupported;
+    public boolean inputLinesConnected;
+    public boolean inputLinesOnlyRtsCts;
+    public int writePacketSize = -1;
+    public int writeBufferSize = -1;
 
     public UsbWrapper(Context context, UsbSerialDriver serialDriver, int devicePort) {
         this.context = context;
         this.serialDriver = serialDriver;
         this.devicePort = devicePort;
         serialPort = serialDriver.getPorts().get(devicePort);
+        CommonUsbSerialPort.DEBUG = true;
     }
 
     public void setUp() throws Exception {
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (!usbManager.hasPermission(serialDriver.getDevice())) {
+            Uri notification = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+            RingtoneManager.getRingtone(context, notification).play();
+
             Log.d(TAG,"USB permission ...");
             final Boolean[] granted = {null};
             BroadcastReceiver usbReceiver = new BroadcastReceiver() {
@@ -72,7 +84,8 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
                     granted[0] = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
                 }
             };
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(context, 0, new Intent("com.android.example.USB_PERMISSION"), 0);
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(context, 0, new Intent("com.android.example.USB_PERMISSION"), flags);
             IntentFilter filter = new IntentFilter("com.android.example.USB_PERMISSION");
             context.registerReceiver(usbReceiver, filter);
             usbManager.requestPermission(serialDriver.getDevice(), permissionIntent);
@@ -81,8 +94,52 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
                 Thread.sleep(1);
             }
             Log.d(TAG,"USB permission "+granted[0]);
-            assertTrue("USB permission dialog not confirmed", granted[0]==null?false:granted[0]);
+            assertTrue("USB permission dialog not confirmed", granted[0] != null && granted[0]);
         }
+
+        // extract some device properties:
+        isCp21xxRestrictedPort = serialDriver instanceof Cp21xxSerialDriver && serialDriver.getPorts().size()==2 && serialPort.getPortNumber() == 1;
+        // output lines are supported by all drivers
+        // input lines are supported by all drivers except CDC
+        if (serialDriver instanceof FtdiSerialDriver) {
+            inputLinesSupported = true;
+            if(serialDriver.getDevice().getProductId() == UsbId.FTDI_FT2232H)
+                inputLinesConnected = true; // I only have 74LS138 connected at FT2232, not at FT232
+            if(serialDriver.getDevice().getProductId() == UsbId.FTDI_FT231X) {
+                inputLinesConnected = true;
+                inputLinesOnlyRtsCts = true; // I only test with FT230X that has only these 2 control lines. DTR is silently ignored
+            }
+        } else if (serialDriver instanceof Cp21xxSerialDriver) {
+            inputLinesSupported = true;
+            if(serialDriver.getPorts().size() == 1)
+                inputLinesConnected = true; // I only have 74LS138 connected at CP2102, not at CP2105
+        } else if (serialDriver instanceof ProlificSerialDriver) {
+            inputLinesSupported = true;
+            inputLinesConnected = true;
+        } else if (serialDriver instanceof Ch34xSerialDriver) {
+            inputLinesSupported = true;
+            if(serialDriver.getDevice().getProductId() == UsbId.QINHENG_CH340)
+                inputLinesConnected = true;  // I only have 74LS138 connected at CH340, not connected at CH341A
+        }
+
+        if (serialDriver instanceof Cp21xxSerialDriver) {
+            if (serialDriver.getPorts().size() == 1) { writePacketSize = 64; writeBufferSize = 576; }
+            else if (serialPort.getPortNumber() == 0) { writePacketSize = 64; writeBufferSize = 320; }
+            else { writePacketSize = 32; writeBufferSize = 128; }; //, 160}; // write buffer size detection is unreliable
+        } else if (serialDriver instanceof Ch34xSerialDriver) {
+            writePacketSize = 32; writeBufferSize = 64;
+        } else if (serialDriver instanceof ProlificSerialDriver) {
+            writePacketSize = 64; writeBufferSize = 256;
+        } else if (serialDriver instanceof FtdiSerialDriver) {
+            switch (serialDriver.getPorts().size()) {
+                case 1: writePacketSize = 64; writeBufferSize = 128; break;
+                case 2: writePacketSize = 512; writeBufferSize = 4096; break;
+                case 4: writePacketSize = 512; writeBufferSize = 2048; break;
+            }
+        } else if (serialDriver instanceof CdcAcmSerialDriver) {
+            writePacketSize = 64; writeBufferSize = 128;
+        }
+
     }
 
     public void tearDown() {
@@ -154,16 +211,12 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
         if(!flags.contains(OpenCloseFlags.NO_IOMANAGER_THREAD)) {
             ioManager = new SerialInputOutputManager(serialPort, this);
             if(!flags.contains(OpenCloseFlags.NO_IOMANAGER_START))
-                Executors.newSingleThreadExecutor().submit(ioManager);
+                ioManager.start();
         }
         synchronized (readBuffer) {
             readBuffer.clear();
         }
         readError = null;
-    }
-
-    public void startIoManager() {
-        Executors.newSingleThreadExecutor().submit(ioManager);
     }
 
     public void waitForIoManagerStarted() throws IOException {
@@ -176,6 +229,14 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
             }
         }
         throw new IOException("IoManager not started");
+    }
+
+    public boolean hasIoManagerThread() {
+        for (Thread thread : Thread.getAllStackTraces().keySet()) {
+            if (thread.getName().equals(SerialInputOutputManager.class.getSimpleName()))
+                return true;
+        }
+        return false;
     }
 
     // wait full time
@@ -196,7 +257,7 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
         if(ioManager != null) {
             while (System.currentTimeMillis() < end) {
                 if(readError != null)
-                    throw readError;
+                    throw new IOException(readError);
                 synchronized (readBuffer) {
                     while(readBuffer.peek() != null)
                         buf.put(readBuffer.remove());
@@ -226,7 +287,7 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
         serialPort.write(data, USB_WRITE_WAIT);
     }
 
-    public void setParameters(int baudRate, int dataBits, int stopBits, int parity) throws IOException, InterruptedException {
+    public void setParameters(int baudRate, int dataBits, int stopBits, @UsbSerialPort.Parity int parity) throws IOException, InterruptedException {
         serialPort.setParameters(baudRate, dataBits, stopBits, parity);
         if(serialDriver instanceof CdcAcmSerialDriver)
             Thread.sleep(10); // arduino_leonardeo_bridge.ini needs some time
@@ -243,15 +304,40 @@ public class UsbWrapper implements SerialInputOutputManager.Listener {
         }
     }
 
+    // return [write packet size, write buffer size(s)]
+    public int[] getWriteSizes() {
+        if (serialDriver instanceof Cp21xxSerialDriver) {
+            if (serialDriver.getPorts().size() == 1) return new int[]{64, 576};
+            else if (serialPort.getPortNumber() == 0) return new int[]{64, 320};
+            else return new int[]{32, 128, 160}; // write buffer size detection is unreliable
+        } else if (serialDriver instanceof Ch34xSerialDriver) {
+            return new int[]{32, 64};
+        } else if (serialDriver instanceof ProlificSerialDriver) {
+            return new int[]{64, 256};
+        } else if (serialDriver instanceof FtdiSerialDriver) {
+            switch (serialDriver.getPorts().size()) {
+                case 1: return new int[]{64, 128};
+                case 2: return new int[]{512, 4096};
+                case 4: return new int[]{512, 2048};
+                default: return null;
+            }
+        } else if (serialDriver instanceof CdcAcmSerialDriver) {
+            return new int[]{64, 128};
+        } else {
+            return null;
+        }
+    }
+
+
     @Override
     public void onNewData(byte[] data) {
         long now = System.currentTimeMillis();
         if(readTime == 0)
             readTime = now;
         if(data.length > 64) {
-            Log.d(TAG, "usb read: time+=" + String.format("%-3d",now- readTime) + " len=" + String.format("%-4d",data.length) + " data=" + new String(data, 0, 32) + "..." + new String(data, data.length-32, 32));
+            Log.d(TAG, "usb " + devicePort + " read: time+=" + String.format("%-3d",now- readTime) + " len=" + String.format("%-4d",data.length) + " data=" + new String(data, 0, 32) + "..." + new String(data, data.length-32, 32));
         } else {
-            Log.d(TAG, "usb read: time+=" + String.format("%-3d",now- readTime) + " len=" + String.format("%-4d",data.length) + " data=" + new String(data));
+            Log.d(TAG, "usb " + devicePort + " read: time+=" + String.format("%-3d",now- readTime) + " len=" + String.format("%-4d",data.length) + " data=" + new String(data));
         }
         readTime = now;
 

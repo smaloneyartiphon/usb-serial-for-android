@@ -204,7 +204,7 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
         }
 
         @Override
-        public void setParameters(int baudRate, int dataBits, int stopBits, int parity) throws IOException {
+        public void setParameters(int baudRate, int dataBits, int stopBits, @Parity int parity) throws IOException {
             if(baudRate <= 0) {
                 throw new IllegalArgumentException("Invalid baud rate: " + baudRate);
             }
@@ -287,7 +287,7 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
     }
 
     public static Map<Integer, int[]> getSupportedDevices() {
-        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<Integer, int[]>();
+        final Map<Integer, int[]> supportedDevices = new LinkedHashMap<>();
         supportedDevices.put(UsbId.VENDOR_ARDUINO,
                 new int[] {
                         UsbId.ARDUINO_UNO,
@@ -303,19 +303,32 @@ public class CdcAcmSerialDriver implements UsbSerialDriver {
                 });
         supportedDevices.put(UsbId.VENDOR_VAN_OOIJEN_TECH,
                 new int[] {
-                    UsbId.VAN_OOIJEN_TECH_TEENSYDUINO_SERIAL,
+                        UsbId.VAN_OOIJEN_TECH_TEENSYDUINO_SERIAL,
                 });
         supportedDevices.put(UsbId.VENDOR_ATMEL,
                 new int[] {
-                    UsbId.ATMEL_LUFA_CDC_DEMO_APP,
+                        UsbId.ATMEL_LUFA_CDC_DEMO_APP,
                 });
         supportedDevices.put(UsbId.VENDOR_LEAFLABS,
                 new int[] {
-                    UsbId.LEAFLABS_MAPLE,
+                        UsbId.LEAFLABS_MAPLE,
                 });
         supportedDevices.put(UsbId.VENDOR_ARM,
                 new int[] {
-                    UsbId.ARM_MBED,
+                        UsbId.ARM_MBED,
+                });
+        supportedDevices.put(UsbId.VENDOR_ST,
+                new int[] {
+                        UsbId.ST_CDC,
+                });
+        supportedDevices.put(UsbId.VENDOR_RASPBERRY_PI,
+                new int[] {
+                        UsbId.RASPBERRY_PI_PICO_MICROPYTHON,
+                        UsbId.RASPBERRY_PI_PICO_SDK,
+                });
+        supportedDevices.put(UsbId.VENDOR_QINHENG,
+                new int[] {
+                        UsbId.QINHENG_CH9102F,
                 });
         return supportedDevices;
     }
